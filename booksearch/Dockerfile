@@ -8,4 +8,4 @@ COPY . .
 
 RUN go install -v ./...
 
-CMD [ "project" ]
+CMD ["go", "run", "main.go"]

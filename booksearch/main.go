@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -11,11 +12,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/olivere/elastic"
 	"github.com/teris-io/shortid"
+	"golang.org/x/net/html"
 )
 
 const (
 	elasticIndexName = "books"
 	elasticTypeName  = "book"
+	baseUrlTitle     = "http://www.gutenberg.org/ebooks/"
+	baseUrlContent   = "http://www.gutenberg.org/0/"
 )
 
 type Book struct {
@@ -38,10 +42,24 @@ type SearchResponse struct {
 
 var (
 	elasticClient *elastic.Client
+	startIndex    int
 )
 
 func main() {
 	var err error
+	ticker := time.NewTicker(1 * time.Minute)
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				crawlBooks()
+			}
+		}
+	}()
+
 	for {
 		elasticClient, err = elastic.NewClient(
 			elastic.SetURL("http://elasticsearch:9200"),
@@ -51,6 +69,7 @@ func main() {
 			log.Println(err)
 			time.Sleep(3 * time.Second)
 		} else {
+			startIndex = 1
 			break
 		}
 	}
@@ -62,6 +81,57 @@ func main() {
 	if err = r.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
+
+	time.Sleep(20 * time.Minute)
+	ticker.Stop()
+	done <- true
+}
+
+func crawlBooks() {
+	var index int
+	for index = startIndex; index < startIndex+10; index++ {
+		url := baseUrlTitle + strconv.Itoa(index)
+		res, err := http.Get(url)
+		log.Println("at index:", index)
+		if err != nil {
+			log.Println("can't get url data")
+			return
+		}
+		defer res.Body.Close()
+		title := extractTitle(res.Body)
+		log.Println(title)
+	}
+	startIndex = index
+}
+
+func extractTitle(res io.Reader) string {
+	tokenizer := html.NewTokenizer(res)
+	for {
+		token := tokenizer.Next()
+		switch token {
+		case html.StartTagToken, html.SelfClosingTagToken:
+			tag := tokenizer.Token()
+			if tag.Data == "meta" {
+				ogTitle, ok := extractMetaProperty(tag, "og:title")
+				if ok {
+					return ogTitle
+				}
+			}
+		}
+	}
+}
+
+func extractMetaProperty(tag html.Token, prop string) (content string, ok bool) {
+	for _, attr := range tag.Attr {
+		if attr.Key == "property" && attr.Val == prop {
+			ok = true
+		}
+
+		if attr.Key == "content" {
+			content = attr.Val
+		}
+	}
+	return
 }
 
 func getBookEndpoint(c *gin.Context) {

@@ -140,6 +140,17 @@
 
 [[projects]]
   branch = "master"
+  digest = "1:ca901dc31bf65bcdf4ceb1b9b83292ea7b71bf9e4e22a807093900c737e1d960"
+  name = "golang.org/x/net"
+  packages = [
+    "html",
+    "html/atom",
+  ]
+  pruneopts = "UT"
+  revision = "7e3656a0809f6f95abd88ac65313578f80b00df2"
+
+[[projects]]
+  branch = "master"
   digest = "1:d85f9416a95aba57c985b1f48f900da97404d8258c3374cce4e49616c57bf8c9"
   name = "golang.org/x/sys"
   packages = [
@@ -208,6 +219,7 @@
     "github.com/gin-gonic/gin",
     "github.com/olivere/elastic",
     "github.com/teris-io/shortid",
+    "golang.org/x/net/html",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1
