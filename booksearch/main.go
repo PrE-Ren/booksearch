@@ -30,16 +30,10 @@ type CreateBookRequest struct {
 	Content string `json:"content"`
 }
 
-type BookResponse struct {
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	Content   string    `json:"content"`
-}
-
 type SearchResponse struct {
-	Time  string         `json:"time"`
-	Hits  string         `json:"hits"`
-	Books []BookResponse `json:"books"`
+	Time  string `json:"time"`
+	Hits  string `json:"hits"`
+	Books []Book `json:"books"`
 }
 
 var (
@@ -76,17 +70,16 @@ func getBookEndpoint(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, "Id not specified")
 		return
 	}
-	res, err := elasticClient.Get().Index("books").Id(id).Do(c)
+	res, err := elasticClient.Get().Index("books").Type("book").Id(id).Do(c)
 	if err != nil {
 		log.Println(err)
-		errorResponse(c, http.StatusInternalServerError, "Failed to get book")
+		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, res)
+	c.JSON(http.StatusOK, res.Source)
 }
 
 func createBookEndpoint(c *gin.Context) {
-	// Parse request
 	var req CreateBookRequest
 	if err := c.BindJSON(&req); err != nil {
 		errorResponse(c, http.StatusBadRequest, "Malformed request body")
@@ -102,14 +95,14 @@ func createBookEndpoint(c *gin.Context) {
 	data, err := json.Marshal(book)
 	if err != nil {
 		log.Println(err)
-		errorResponse(c, http.StatusInternalServerError, "Failed to create book")
+		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	js := string(data)
-	_, err = elasticClient.Index().Index("books").BodyJson(js).Do(c)
+	_, err = elasticClient.Index().Index("books").Type("book").Id(book.ID).BodyJson(js).Do(c)
 	if err != nil {
 		log.Println(err)
-		errorResponse(c, http.StatusInternalServerError, "Failed to create book")
+		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.Status(http.StatusOK)
@@ -139,16 +132,16 @@ func searchEndpoint(c *gin.Context) {
 		Do(c.Request.Context())
 	if err != nil {
 		log.Println(err)
-		errorResponse(c, http.StatusInternalServerError, "Something went wrong")
+		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	res := SearchResponse{
 		Time: fmt.Sprintf("%d", result.TookInMillis),
 		Hits: fmt.Sprintf("%d", result.Hits.TotalHits),
 	}
-	books := make([]BookResponse, 0)
+	books := make([]Book, 0)
 	for _, hit := range result.Hits.Hits {
-		var book BookResponse
+		var book Book
 		json.Unmarshal(*hit.Source, &book)
 		books = append(books, book)
 	}
