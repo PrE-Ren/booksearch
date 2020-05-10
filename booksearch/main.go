@@ -1,37 +1,44 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/olivere/elastic"
-	"github.com/teris-io/shortid"
-	"golang.org/x/net/html"
+	"golang.org/x/net/context"
 )
 
 const (
 	elasticIndexName = "books"
 	elasticTypeName  = "book"
-	baseUrlTitle     = "http://www.gutenberg.org/ebooks/"
-	baseUrlContent   = "http://www.gutenberg.org/0/"
+	baseUrlTitle     = "http://www.gutenberg.org/files/"
+	layout1          = "January 2, 2006"
+	layout2          = "January, 2006"
 )
 
 type Book struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	Content   string    `json:"content"`
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	Author     string    `json:"author"`
+	CreatedAt  time.Time `json:"created_at"`
+	ReleasedAt time.Time `json:"released_at"`
+	Content    string    `json:"content"`
 }
 
 type CreateBookRequest struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	Author     string    `json:"author"`
+	ReleasedAt time.Time `json:"released_at"`
+	Content    string    `json:"content"`
 }
 
 type SearchResponse struct {
@@ -55,6 +62,7 @@ func main() {
 			case <-done:
 				return
 			case <-ticker.C:
+				//ticker = time.NewTicker(24 * time.Hour)
 				crawlBooks()
 			}
 		}
@@ -82,56 +90,96 @@ func main() {
 		log.Fatal(err)
 	}
 
-	time.Sleep(20 * time.Minute)
-	ticker.Stop()
-	done <- true
+	for {
+
+	}
+	// ticker.Stop()
+	// done <- true
 }
 
 func crawlBooks() {
+	bulk := elasticClient.Bulk()
+	ctx := context.Background()
 	var index int
 	for index = startIndex; index < startIndex+10; index++ {
-		url := baseUrlTitle + strconv.Itoa(index)
+		url := baseUrlTitle + strconv.Itoa(index) + "/" + strconv.Itoa(index) + ".txt"
 		res, err := http.Get(url)
-		log.Println("at index:", index)
 		if err != nil {
 			log.Println("can't get url data")
 			return
 		}
 		defer res.Body.Close()
-		title := extractTitle(res.Body)
-		log.Println(title)
+		title, author, release_date, content := extractData(res.Body)
+		if title != "" {
+			log.Println("at index:" + strconv.Itoa(index))
+			log.Println(title)
+			log.Println(author)
+			log.Println(release_date)
+			rdate := parseAsDate(release_date)
+			log.Println(rdate)
+			book := Book{
+				ID:         strconv.Itoa(index),
+				Title:      title,
+				Author:     author,
+				CreatedAt:  time.Now().UTC(),
+				ReleasedAt: rdate,
+				Content:    content,
+			}
+			req := elastic.NewBulkIndexRequest().Index("books").Type("book").Id(strconv.Itoa(index)).Doc(book)
+			bulk = bulk.Add(req)
+		}
+	}
+	_, err := bulk.Do(ctx)
+	if err != nil {
+		log.Println("Bulk insert failed")
+		log.Println(err)
+	} else {
+		log.Println("Bulk insert success")
 	}
 	startIndex = index
 }
 
-func extractTitle(res io.Reader) string {
-	tokenizer := html.NewTokenizer(res)
-	for {
-		token := tokenizer.Next()
-		switch token {
-		case html.StartTagToken, html.SelfClosingTagToken:
-			tag := tokenizer.Token()
-			if tag.Data == "meta" {
-				ogTitle, ok := extractMetaProperty(tag, "og:title")
-				if ok {
-					return ogTitle
-				}
-			}
+func parseAsDate(release_date string) time.Time {
+	rdate := strings.Split(release_date, "[")
+	rdate2 := strings.TrimSpace(rdate[0])
+	t1, err := time.Parse(layout1, rdate2)
+	if err != nil {
+		t2, err := time.Parse(layout2, rdate2)
+		if err != nil {
+			return time.Now()
 		}
+		return t2
 	}
+	return t1
 }
 
-func extractMetaProperty(tag html.Token, prop string) (content string, ok bool) {
-	for _, attr := range tag.Attr {
-		if attr.Key == "property" && attr.Val == prop {
-			ok = true
+func extractData(res io.Reader) (string, string, string, string) {
+	var title = ""
+	var author = ""
+	var rd string
+	var progress = 0
+	var content strings.Builder
+	scanner := bufio.NewScanner(res)
+	for scanner.Scan() {
+		text := scanner.Text()
+		if err := scanner.Err(); err != nil {
+			break
 		}
-
-		if attr.Key == "content" {
-			content = attr.Val
+		if progress == 1 {
+			content.WriteString(text + "\n")
+		} else if strings.Contains(text, "Title: ") {
+			title = strings.TrimPrefix(text, "Title: ")
+		} else if strings.Contains(text, "Author: ") {
+			author = strings.TrimPrefix(text, "Author: ")
+		} else if strings.Contains(text, "*** START") {
+			progress = 1
+		} else if strings.Contains(text, "*** END") {
+			break
+		} else if strings.Contains(text, "Release Date: ") {
+			rd = strings.TrimPrefix(text, "Release Date: ")
 		}
 	}
-	return
+	return title, author, rd, content.String()
 }
 
 func getBookEndpoint(c *gin.Context) {
@@ -157,10 +205,12 @@ func createBookEndpoint(c *gin.Context) {
 	}
 
 	book := Book{
-		ID:        shortid.MustGenerate(),
-		Title:     req.Title,
-		CreatedAt: time.Now().UTC(),
-		Content:   req.Content,
+		ID:         req.ID,
+		Title:      req.Title,
+		Author:     req.Author,
+		CreatedAt:  time.Now().UTC(),
+		ReleasedAt: req.ReleasedAt,
+		Content:    req.Content,
 	}
 	data, err := json.Marshal(book)
 	if err != nil {

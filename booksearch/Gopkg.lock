@@ -123,14 +123,6 @@
   version = "v0.9.1"
 
 [[projects]]
-  digest = "1:c08f5d8cc28ed4dccb098121d5f1f19f708bf04e3bbd4b772ce6461de6ef1ca2"
-  name = "github.com/teris-io/shortid"
-  packages = ["."]
-  pruneopts = "UT"
-  revision = "6c56cef5189ca1b3d5ef01dc07f4d611dfc0bb33"
-  version = "v1.0"
-
-[[projects]]
   digest = "1:5a1cf4e370bc86137b58da2ae065e76526d32b11f62a7665f36dbd5f41fa95ff"
   name = "github.com/ugorji/go"
   packages = ["codec"]
@@ -140,12 +132,9 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:ca901dc31bf65bcdf4ceb1b9b83292ea7b71bf9e4e22a807093900c737e1d960"
+  digest = "1:76ee51c3f468493aff39dbacc401e8831fbb765104cbf613b89bef01cf4bad70"
   name = "golang.org/x/net"
-  packages = [
-    "html",
-    "html/atom",
-  ]
+  packages = ["context"]
   pruneopts = "UT"
   revision = "7e3656a0809f6f95abd88ac65313578f80b00df2"
 
@@ -218,8 +207,7 @@
   input-imports = [
     "github.com/gin-gonic/gin",
     "github.com/olivere/elastic",
-    "github.com/teris-io/shortid",
-    "golang.org/x/net/html",
+    "golang.org/x/net/context",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1
