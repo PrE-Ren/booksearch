@@ -22,6 +22,7 @@ const (
 	baseUrlTitle     = "http://www.gutenberg.org/files/"
 	layout1          = "January 2, 2006"
 	layout2          = "January, 2006"
+	layout3          = "2006"
 )
 
 type Book struct {
@@ -54,19 +55,19 @@ var (
 
 func main() {
 	var err error
-	ticker := time.NewTicker(1 * time.Minute)
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				//ticker = time.NewTicker(24 * time.Hour)
-				crawlBooks()
-			}
-		}
-	}()
+	// ticker := time.NewTicker(1 * time.Minute)
+	// done := make(chan bool)
+	// go func() {
+	// 	for {
+	// 		select {
+	// 		case <-done:
+	// 			return
+	// 		case <-ticker.C:
+	// 			//ticker = time.NewTicker(24 * time.Hour)
+	// 			crawlBooks()
+	// 		}
+	// 	}
+	// }()
 
 	for {
 		elasticClient, err = elastic.NewClient(
@@ -90,9 +91,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	for {
+	// for {
 
-	}
+	// }
 	// ticker.Stop()
 	// done <- true
 }
@@ -146,7 +147,11 @@ func parseAsDate(release_date string) time.Time {
 	if err != nil {
 		t2, err := time.Parse(layout2, rdate2)
 		if err != nil {
-			return time.Now()
+			t3, err := time.Parse(layout3, rdate2)
+			if err != nil {
+				return time.Now()
+			}
+			return t3
 		}
 		return t2
 	}
@@ -166,7 +171,7 @@ func extractData(res io.Reader) (string, string, string, string) {
 			break
 		}
 		if progress == 1 {
-			content.WriteString(text + "\n")
+			content.WriteString(text + " ")
 		} else if strings.Contains(text, "Title: ") {
 			title = strings.TrimPrefix(text, "Title: ")
 		} else if strings.Contains(text, "Author: ") {
