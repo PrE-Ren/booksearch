@@ -48,6 +48,36 @@ type SearchResponse struct {
 	Books []Book `json:"books"`
 }
 
+type FuzzyContent struct {
+	Fuzziness string `json:"fuzziness"`
+	Value     string `json:"value"`
+}
+type FuzzyQuery struct {
+	Content FuzzyContent `json:"content"`
+}
+
+type MatchQuery struct {
+	Fuzzy FuzzyQuery `json:"fuzzy"`
+}
+
+type SpanMultiQuery struct {
+	Match MatchQuery `json:"match"`
+}
+
+type Clause struct {
+	SpanMulti SpanMultiQuery `json:"span_multi"`
+}
+
+type SpanNearQuery struct {
+	Clauses []Clause `json:"clauses"`
+	Slop    int      `json:"slop"`
+	InOrder string   `json:"in_order"`
+}
+
+type SpanFuzzyQuery struct {
+	SpanNear SpanNearQuery `json:"span_near"`
+}
+
 var (
 	elasticClient *elastic.Client
 	startIndex    int
@@ -247,14 +277,54 @@ func searchEndpoint(c *gin.Context) {
 	if i, err := strconv.Atoi(c.Query("take")); err == nil {
 		take = i
 	}
-	esQuery := elastic.NewMultiMatchQuery(query, "title", "content").
-		Fuzziness("2").
-		MinimumShouldMatch("2")
+	log.Println(query)
+	terms := strings.Split(query, " ")
+	log.Println(terms)
+	clause := make([]Clause, 0)
+	for i := 0; i < len(terms); i++ {
+		clause = append(clause, Clause{
+			SpanMulti: SpanMultiQuery{
+				Match: MatchQuery{
+					Fuzzy: FuzzyQuery{
+						Content: FuzzyContent{
+							Fuzziness: "2",
+							Value:     terms[i],
+						},
+					},
+				},
+			},
+		})
+	}
+
+	esQuery := SpanFuzzyQuery{
+		SpanNear: SpanNearQuery{
+			Clauses: clause,
+			Slop:    1,
+			InOrder: "true",
+		},
+	}
+
+	// esQuery := elastic.NewMatchQuery("content", query).
+	// 	Fuzziness("1").
+	// 	MinimumShouldMatch(strconv.Itoa(terms - 1)).
+	// 	MaxExpansions(1)
+
+	queryJson, err := json.Marshal(esQuery)
+	log.Println(esQuery)
+	log.Println(string(queryJson))
+	if err != nil {
+		log.Println(err)
+		errorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	result, err := elasticClient.Search().
 		Index(elasticIndexName).
-		Query(esQuery).
+		Query(elastic.RawStringQuery(string(queryJson))).
 		From(skip).Size(take).
+		Sort("_score", false).Sort("released_at", false).
 		Do(c.Request.Context())
+
 	if err != nil {
 		log.Println(err)
 		errorResponse(c, http.StatusInternalServerError, err.Error())
@@ -268,6 +338,7 @@ func searchEndpoint(c *gin.Context) {
 	for _, hit := range result.Hits.Hits {
 		var book Book
 		json.Unmarshal(*hit.Source, &book)
+		book.Content = ""
 		books = append(books, book)
 	}
 	res.Books = books
