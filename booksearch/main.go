@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -42,10 +41,16 @@ type CreateBookRequest struct {
 	Content    string    `json:"content"`
 }
 
+type SearchBook struct {
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	Author     string    `json:"author"`
+	ReleasedAt time.Time `json:"released_at"`
+	Score      float64   `json:"score"`
+}
+
 type SearchResponse struct {
-	Time  string `json:"time"`
-	Hits  string `json:"hits"`
-	Books []Book `json:"books"`
+	Books []SearchBook `json:"books"`
 }
 
 type FuzzyContent struct {
@@ -326,9 +331,7 @@ func searchEndpoint(c *gin.Context) {
 	if i, err := strconv.Atoi(c.Query("take")); err == nil {
 		take = i
 	}
-	log.Println(query)
 	terms := strings.Split(query, " ")
-	log.Println(terms)
 	clause := make([]Clause, 0)
 	for i := 0; i < len(terms); i++ {
 		clause = append(clause, Clause{
@@ -336,7 +339,7 @@ func searchEndpoint(c *gin.Context) {
 				Match: MatchQuery{
 					Fuzzy: FuzzyQuery{
 						Content: FuzzyContent{
-							Fuzziness: "2",
+							Fuzziness: "1",
 							Value:     terms[i],
 						},
 					},
@@ -353,14 +356,7 @@ func searchEndpoint(c *gin.Context) {
 		},
 	}
 
-	// esQuery := elastic.NewMatchQuery("content", query).
-	// 	Fuzziness("1").
-	// 	MinimumShouldMatch(strconv.Itoa(terms - 1)).
-	// 	MaxExpansions(1)
-
 	queryJson, err := json.Marshal(esQuery)
-	log.Println(esQuery)
-	log.Println(string(queryJson))
 	if err != nil {
 		log.Println(err)
 		errorResponse(c, http.StatusInternalServerError, err.Error())
@@ -370,8 +366,8 @@ func searchEndpoint(c *gin.Context) {
 	result, err := elasticClient.Search().
 		Index(elasticIndexName).
 		Query(elastic.RawStringQuery(string(queryJson))).
-		From(skip).Size(take).
-		Sort("_score", false).Sort("released_at", false).
+		From(skip).
+		Size(take).TrackScores(true).
 		Do(c.Request.Context())
 
 	if err != nil {
@@ -379,17 +375,80 @@ func searchEndpoint(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	res := SearchResponse{
-		Time: fmt.Sprintf("%d", result.TookInMillis),
-		Hits: fmt.Sprintf("%d", result.Hits.TotalHits),
-	}
-	books := make([]Book, 0)
+
+	var res SearchResponse
+
+	books := make([]SearchBook, 0)
 	for _, hit := range result.Hits.Hits {
-		var book Book
+		var book SearchBook
 		json.Unmarshal(*hit.Source, &book)
-		book.Content = ""
+		book.Score = *hit.Score
 		books = append(books, book)
 	}
+
+	if len(terms) > 1 {
+		or_clause := make([]SpanFuzzyQuery, 0)
+		for i := 0; i < len(terms); i++ {
+			small_clause := make([]Clause, 0)
+			for j := 0; j < len(terms); j++ {
+				if j != i {
+					small_clause = append(small_clause, Clause{
+						SpanMulti: SpanMultiQuery{
+							Match: MatchQuery{
+								Fuzzy: FuzzyQuery{
+									Content: FuzzyContent{
+										Fuzziness: "1",
+										Value:     terms[j],
+									},
+								},
+							},
+						},
+					})
+				}
+			}
+			or_clause = append(or_clause, SpanFuzzyQuery{
+				SpanNear: SpanNearQuery{
+					Clauses: small_clause,
+					Slop:    1,
+					InOrder: "true",
+				},
+			})
+		}
+
+		esOrQuery := SpanOrFuzzyQuery{
+			SpanOr: SpanOrQuery{
+				Clauses: or_clause,
+			},
+		}
+
+		queryJson, err := json.Marshal(esOrQuery)
+		if err != nil {
+			log.Println(err)
+			errorResponse(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		result, err := elasticClient.Search().
+			Index(elasticIndexName).
+			Query(elastic.RawStringQuery(string(queryJson))).
+			From(skip).
+			Size(take).TrackScores(true).
+			Do(c.Request.Context())
+
+		if err != nil {
+			log.Println(err)
+			errorResponse(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		for _, hit := range result.Hits.Hits {
+			var book SearchBook
+			json.Unmarshal(*hit.Source, &book)
+			book.Score = *hit.Score
+			books = append(books, book)
+		}
+	}
+
 	res.Books = books
 	c.JSON(http.StatusOK, res)
 }
