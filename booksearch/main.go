@@ -78,6 +78,14 @@ type SpanFuzzyQuery struct {
 	SpanNear SpanNearQuery `json:"span_near"`
 }
 
+type SpanOrQuery struct {
+	Clauses []SpanFuzzyQuery `json:"clauses"`
+}
+
+type SpanOrFuzzyQuery struct {
+	SpanOr SpanOrQuery `json:"span_or"`
+}
+
 var (
 	elasticClient *elastic.Client
 	startIndex    int
@@ -114,7 +122,9 @@ func main() {
 	}
 
 	r := gin.Default()
-	r.POST("/books", createBookEndpoint)
+	r.PUT("/books", putBookEndpoint)
+	r.DELETE("/books", deleteBookEndpoint)
+	r.POST("/books", postBookEndpoint)
 	r.GET("/books", getBookEndpoint)
 	r.GET("/search", searchEndpoint)
 	if err = r.Run(":8080"); err != nil {
@@ -232,7 +242,7 @@ func getBookEndpoint(c *gin.Context) {
 	c.JSON(http.StatusOK, res.Source)
 }
 
-func createBookEndpoint(c *gin.Context) {
+func postBookEndpoint(c *gin.Context) {
 	var req CreateBookRequest
 	if err := c.BindJSON(&req); err != nil {
 		errorResponse(c, http.StatusBadRequest, "Malformed request body")
@@ -261,6 +271,45 @@ func createBookEndpoint(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+func putBookEndpoint(c *gin.Context) {
+	var req CreateBookRequest
+	if err := c.BindJSON(&req); err != nil {
+		errorResponse(c, http.StatusBadRequest, "Malformed request body")
+		return
+	}
+
+	book := Book{
+		ID:         req.ID,
+		Title:      req.Title,
+		Author:     req.Author,
+		CreatedAt:  time.Now().UTC(),
+		ReleasedAt: req.ReleasedAt,
+		Content:    req.Content,
+	}
+	_, err := elasticClient.Update().Index("books").Type("book").Id(book.ID).Doc(book).Do(c)
+	if err != nil {
+		log.Println(err)
+		errorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func deleteBookEndpoint(c *gin.Context) {
+	id := c.Query("id")
+	if id == "" {
+		errorResponse(c, http.StatusBadRequest, "Id not specified")
+		return
+	}
+	res, err := elasticClient.Delete().Index("books").Type("book").Id(id).Do(c)
+	if err != nil {
+		log.Println(err)
+		errorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 func searchEndpoint(c *gin.Context) {

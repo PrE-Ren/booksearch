@@ -1,4 +1,7 @@
 {
+  "id": "dum1",
   "title": "dummy book 1",
+  "author": "dummyman1",
+  "released_at": "2019-03-01T00:00:00Z",
   "content": "dummy book is apple banana carrot"
 }
