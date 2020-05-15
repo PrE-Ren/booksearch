@@ -47,6 +47,7 @@ type SearchBook struct {
 	Author     string    `json:"author"`
 	ReleasedAt time.Time `json:"released_at"`
 	Score      float64   `json:"score"`
+	// Highlight  []string  `json:"highlight"`
 }
 
 type SearchResponse struct {
@@ -339,7 +340,7 @@ func searchEndpoint(c *gin.Context) {
 				Match: MatchQuery{
 					Fuzzy: FuzzyQuery{
 						Content: FuzzyContent{
-							Fuzziness: "1",
+							Fuzziness: strconv.Itoa(getMaxFuzzy(len(terms[i]))),
 							Value:     terms[i],
 						},
 					},
@@ -363,11 +364,14 @@ func searchEndpoint(c *gin.Context) {
 		return
 	}
 
+	highlighter := elastic.NewHighlight().HighlighterType("plain").Field("content")
+
 	result, err := elasticClient.Search().
 		Index(elasticIndexName).
 		Query(elastic.RawStringQuery(string(queryJson))).
 		From(skip).
 		Size(take).TrackScores(true).
+		Highlight(highlighter).
 		Do(c.Request.Context())
 
 	if err != nil {
@@ -382,22 +386,22 @@ func searchEndpoint(c *gin.Context) {
 	for _, hit := range result.Hits.Hits {
 		var book SearchBook
 		json.Unmarshal(*hit.Source, &book)
-		book.Score = *hit.Score
+		book.Score = getScore(hit.Highlight["content"], terms, true)
+		// book.Highlight = hit.Highlight["content"]
 		books = append(books, book)
 	}
 
 	if len(terms) > 1 {
-		or_clause := make([]SpanFuzzyQuery, 0)
 		for i := 0; i < len(terms); i++ {
-			small_clause := make([]Clause, 0)
+			clause := make([]Clause, 0)
 			for j := 0; j < len(terms); j++ {
 				if j != i {
-					small_clause = append(small_clause, Clause{
+					clause = append(clause, Clause{
 						SpanMulti: SpanMultiQuery{
 							Match: MatchQuery{
 								Fuzzy: FuzzyQuery{
 									Content: FuzzyContent{
-										Fuzziness: "1",
+										Fuzziness: strconv.Itoa(getMaxFuzzy(len(terms[j]))),
 										Value:     terms[j],
 									},
 								},
@@ -406,51 +410,231 @@ func searchEndpoint(c *gin.Context) {
 					})
 				}
 			}
-			or_clause = append(or_clause, SpanFuzzyQuery{
+
+			esQuery := SpanFuzzyQuery{
 				SpanNear: SpanNearQuery{
-					Clauses: small_clause,
+					Clauses: clause,
 					Slop:    1,
 					InOrder: "true",
 				},
-			})
-		}
+			}
 
-		esOrQuery := SpanOrFuzzyQuery{
-			SpanOr: SpanOrQuery{
-				Clauses: or_clause,
-			},
-		}
+			queryJson, err := json.Marshal(esQuery)
+			if err != nil {
+				log.Println(err)
+				errorResponse(c, http.StatusInternalServerError, err.Error())
+				return
+			}
 
-		queryJson, err := json.Marshal(esOrQuery)
-		if err != nil {
-			log.Println(err)
-			errorResponse(c, http.StatusInternalServerError, err.Error())
-			return
-		}
+			result, err := elasticClient.Search().
+				Index(elasticIndexName).
+				Query(elastic.RawStringQuery(string(queryJson))).
+				From(skip).
+				Size(take).TrackScores(true).
+				Highlight(highlighter).
+				Do(c.Request.Context())
 
-		result, err := elasticClient.Search().
-			Index(elasticIndexName).
-			Query(elastic.RawStringQuery(string(queryJson))).
-			From(skip).
-			Size(take).TrackScores(true).
-			Do(c.Request.Context())
+			if err != nil {
+				log.Println(err)
+				errorResponse(c, http.StatusInternalServerError, err.Error())
+				return
+			}
 
-		if err != nil {
-			log.Println(err)
-			errorResponse(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-
-		for _, hit := range result.Hits.Hits {
-			var book SearchBook
-			json.Unmarshal(*hit.Source, &book)
-			book.Score = *hit.Score
-			books = append(books, book)
+			for _, hit := range result.Hits.Hits {
+				var book SearchBook
+				json.Unmarshal(*hit.Source, &book)
+				if i == 0 {
+					book.Score = getScore(hit.Highlight["content"], terms[1:], false)
+				} else if i == (len(terms) - 1) {
+					book.Score = getScore(hit.Highlight["content"], terms[:i], false)
+				} else {
+					tmp_terms := make([]string, 0)
+					tmp_terms = append(tmp_terms, terms[:i]...)
+					tmp_terms = append(tmp_terms, terms[i+1:]...)
+					book.Score = getScore(hit.Highlight["content"], tmp_terms, false)
+				}
+				// book.Highlight = hit.Highlight["content"]
+				books = append(books, book)
+			}
 		}
 	}
 
-	res.Books = books
+	res.Books = removeDuplicates(books)
 	c.JSON(http.StatusOK, res)
+}
+
+func getScore(input []string, terms []string, supplement bool) float64 {
+	count := len(terms)
+	max_terms := count
+	if !supplement {
+		max_terms += 1
+	}
+	max_score := max_terms*max_terms + 1
+	current_max := 0.0
+	log.Println(terms)
+	if supplement {
+		current_max += float64(max_terms*max_terms + 1)
+		max_score += max_terms*max_terms + 1
+	}
+
+	for _, sentence := range input {
+		words := strings.Split(sentence, " ")
+		word_num := 0
+		gaps := 0
+		total_fuzzy := 0.0
+		is_middle := false
+		for _, word := range words {
+			if word == "" {
+				continue
+			}
+			parts := strings.Split(word, "\u003cem\u003e")
+			if len(parts) == 1 {
+				if is_middle {
+					gaps += 1
+				}
+				continue
+			} else if len(parts) == 2 {
+				real_word := strings.Split(parts[1], "\u003c/em\u003e")
+				max_fuzzy := getMaxFuzzy(len(terms[word_num]))
+				if max_fuzzy != 0 {
+					total_fuzzy += (float64(getFuzzyCount(real_word[0], terms[word_num])) / float64(max_fuzzy))
+				}
+				word_num += 1
+				if word_num == count {
+					is_middle = false
+					word_num = 0
+					break
+				} else {
+					is_middle = true
+				}
+			}
+		}
+
+		if !is_middle {
+			score := float64(max_score) - float64(gaps)*float64(max_terms) - total_fuzzy
+			if current_max < score {
+				current_max = score
+				if current_max == float64(max_score) {
+					return current_max
+				}
+			}
+		}
+	}
+
+	return current_max
+}
+
+func getMaxFuzzy(input int) int {
+	if input >= 8 {
+		return 2
+	} else if input >= 4 {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+func getFuzzyCount(s1 string, s2 string) int {
+	input := strings.ToLower(s1)
+	query := strings.ToLower(s2)
+	diff_len := len(input) - len(query)
+	if diff_len == 1 {
+		for i := 0; i < len(input); i++ {
+			if i == 0 {
+				if query == input[1:] {
+					return 1
+				}
+			} else {
+				if query == (input[0:i] + input[i+1:]) {
+					return 1
+				}
+			}
+		}
+		return 2
+	}
+
+	if diff_len == -1 {
+		for i := 0; i < len(query); i++ {
+			if i == 0 {
+				if input == query[1:] {
+					return 1
+				}
+			} else {
+				if input == (query[0:i] + query[i+1:]) {
+					return 1
+				}
+			}
+		}
+		return 2
+	}
+
+	if diff_len == 0 {
+		if query == input {
+			return 0
+		}
+		for i := 0; i < len(query); i++ {
+			if i == 0 {
+				if input[1:] == query[1:] {
+					return 1
+				} else if (input[0] == query[1]) && (query[0] == input[1]) {
+					if len(input) == 2 {
+						return 1
+					} else {
+						if input[2:] == query[2:] {
+							return 1
+						}
+					}
+				}
+			} else if i == (len(input) - 1) {
+				if input[0:i] == query[0:i] {
+					return 1
+				}
+			} else {
+				if (input[0:i] + input[i+1:]) == (query[0:i] + query[i+1:]) {
+					return 1
+				} else if (input[i] == query[i+1]) && (query[i] == input[i+1]) {
+					if i == (len(input) - 2) {
+						if input[0:i] == query[0:i] {
+							return 1
+						}
+					} else if (input[0:i] + input[i+2:]) == (query[0:i] + query[i+2:]) {
+						return 1
+					}
+				}
+			}
+		}
+		return 2
+	}
+	return 2
+}
+
+func removeDuplicates(bookList []SearchBook) []SearchBook {
+	filteredBooks := make([]SearchBook, 0)
+	existingId := make(map[string]bool, 0)
+	for i := 0; i < len(bookList); i++ {
+		_, ok := existingId[bookList[i].ID]
+		if !ok {
+			existingId[bookList[i].ID] = true
+			filteredBooks = append(filteredBooks, bookList[i])
+		}
+	}
+	return filteredBooks
+}
+
+func removeDuplicatesV2(prevList []SearchBook, bookList []SearchBook) []SearchBook {
+	filteredBooks := make([]SearchBook, 0)
+	existingId := make(map[string]bool, 0)
+	for i := 0; i < len(prevList); i++ {
+		existingId[prevList[i].ID] = true
+	}
+	for i := 0; i < len(bookList); i++ {
+		_, ok := existingId[bookList[i].ID]
+		if !ok {
+			existingId[bookList[i].ID] = true
+			filteredBooks = append(filteredBooks, bookList[i])
+		}
+	}
+	return filteredBooks
 }
 
 func errorResponse(c *gin.Context, code int, err string) {
