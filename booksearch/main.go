@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -324,14 +325,10 @@ func searchEndpoint(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, "Query not specified")
 		return
 	}
+	field := c.Query("field")
 	skip := 0
-	take := 10
-	if i, err := strconv.Atoi(c.Query("skip")); err == nil {
-		skip = i
-	}
-	if i, err := strconv.Atoi(c.Query("take")); err == nil {
-		take = i
-	}
+	take := 1000
+	take_more := 30
 	terms := strings.Split(query, " ")
 	clause := make([]Clause, 0)
 	for i := 0; i < len(terms); i++ {
@@ -370,7 +367,7 @@ func searchEndpoint(c *gin.Context) {
 		Index(elasticIndexName).
 		Query(elastic.RawStringQuery(string(queryJson))).
 		From(skip).
-		Size(take).TrackScores(true).
+		Size(take).TrackScores(false).
 		Highlight(highlighter).
 		Do(c.Request.Context())
 
@@ -387,11 +384,10 @@ func searchEndpoint(c *gin.Context) {
 		var book SearchBook
 		json.Unmarshal(*hit.Source, &book)
 		book.Score = getScore(hit.Highlight["content"], terms, true)
-		// book.Highlight = hit.Highlight["content"]
 		books = append(books, book)
 	}
 
-	if len(terms) > 1 {
+	if len(terms) > 1 && len(books) < 30 {
 		for i := 0; i < len(terms); i++ {
 			clause := make([]Clause, 0)
 			for j := 0; j < len(terms); j++ {
@@ -430,7 +426,7 @@ func searchEndpoint(c *gin.Context) {
 				Index(elasticIndexName).
 				Query(elastic.RawStringQuery(string(queryJson))).
 				From(skip).
-				Size(take).TrackScores(true).
+				Size(take_more).TrackScores(false).
 				Highlight(highlighter).
 				Do(c.Request.Context())
 
@@ -453,13 +449,32 @@ func searchEndpoint(c *gin.Context) {
 					tmp_terms = append(tmp_terms, terms[i+1:]...)
 					book.Score = getScore(hit.Highlight["content"], tmp_terms, false)
 				}
-				// book.Highlight = hit.Highlight["content"]
 				books = append(books, book)
 			}
 		}
 	}
+	sorted_books := sortByField("score", removeDuplicates(books))
+	if len(sorted_books) > 30 {
+		res.Books = sorted_books[:30]
+	} else {
+		res.Books = sorted_books
+	}
 
-	res.Books = removeDuplicates(books)
+	if field != "" {
+		field_sorted_books := sortByField(field, sorted_books)
+		if len(field_sorted_books) > 10 {
+			res.Books = field_sorted_books[:10]
+		} else {
+			res.Books = field_sorted_books
+		}
+	} else {
+		if len(sorted_books) > 10 {
+			res.Books = sorted_books[:10]
+		} else {
+			res.Books = sorted_books
+		}
+	}
+
 	c.JSON(http.StatusOK, res)
 }
 
@@ -471,9 +486,9 @@ func getScore(input []string, terms []string, supplement bool) float64 {
 	}
 	max_score := max_terms*max_terms + 1
 	current_max := 0.0
-	log.Println(terms)
+
 	if supplement {
-		current_max += float64(max_terms*max_terms + 1)
+		current_max += float64(max_terms*max_terms + 2)
 		max_score += max_terms*max_terms + 1
 	}
 
@@ -621,20 +636,26 @@ func removeDuplicates(bookList []SearchBook) []SearchBook {
 	return filteredBooks
 }
 
-func removeDuplicatesV2(prevList []SearchBook, bookList []SearchBook) []SearchBook {
-	filteredBooks := make([]SearchBook, 0)
-	existingId := make(map[string]bool, 0)
-	for i := 0; i < len(prevList); i++ {
-		existingId[prevList[i].ID] = true
+func sortByField(field string, list []SearchBook) []SearchBook {
+	new_list := make([]SearchBook, 0)
+	new_list = append(new_list, list...)
+	if field == "score" {
+		sort.SliceStable(new_list, func(i, j int) bool {
+			return new_list[i].Score > new_list[j].Score
+		})
+		return new_list
+	} else if field == "time" {
+		sort.SliceStable(new_list, func(i, j int) bool {
+			return new_list[i].ReleasedAt.After(new_list[j].ReleasedAt)
+		})
+		return new_list
+	} else if field == "alphabet" {
+		sort.SliceStable(new_list, func(i, j int) bool {
+			return new_list[i].Title < new_list[j].Title
+		})
 	}
-	for i := 0; i < len(bookList); i++ {
-		_, ok := existingId[bookList[i].ID]
-		if !ok {
-			existingId[bookList[i].ID] = true
-			filteredBooks = append(filteredBooks, bookList[i])
-		}
-	}
-	return filteredBooks
+
+	return new_list
 }
 
 func errorResponse(c *gin.Context, code int, err string) {
