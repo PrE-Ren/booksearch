@@ -55,43 +55,43 @@ type SearchResponse struct {
 	Books []SearchBook `json:"books"`
 }
 
-type FuzzyContent struct {
-	Fuzziness string `json:"fuzziness"`
-	Value     string `json:"value"`
-}
-type FuzzyQuery struct {
-	Content FuzzyContent `json:"content"`
-}
+// type FuzzyContent struct {
+// 	Fuzziness string `json:"fuzziness"`
+// 	Value     string `json:"value"`
+// }
+// type FuzzyQuery struct {
+// 	Content FuzzyContent `json:"content"`
+// }
 
-type MatchQuery struct {
-	Fuzzy FuzzyQuery `json:"fuzzy"`
-}
+// type MatchQuery struct {
+// 	Fuzzy FuzzyQuery `json:"fuzzy"`
+// }
 
-type SpanMultiQuery struct {
-	Match MatchQuery `json:"match"`
-}
+// type SpanMultiQuery struct {
+// 	Match MatchQuery `json:"match"`
+// }
 
-type Clause struct {
-	SpanMulti SpanMultiQuery `json:"span_multi"`
-}
+// type Clause struct {
+// 	SpanMulti SpanMultiQuery `json:"span_multi"`
+// }
 
-type SpanNearQuery struct {
-	Clauses []Clause `json:"clauses"`
-	Slop    int      `json:"slop"`
-	InOrder string   `json:"in_order"`
-}
+// type SpanNearQuery struct {
+// 	Clauses []Clause `json:"clauses"`
+// 	Slop    int      `json:"slop"`
+// 	InOrder string   `json:"in_order"`
+// }
 
-type SpanFuzzyQuery struct {
-	SpanNear SpanNearQuery `json:"span_near"`
-}
+// type SpanFuzzyQuery struct {
+// 	SpanNear SpanNearQuery `json:"span_near"`
+// }
 
-type SpanOrQuery struct {
-	Clauses []SpanFuzzyQuery `json:"clauses"`
-}
+// type SpanOrQuery struct {
+// 	Clauses []SpanFuzzyQuery `json:"clauses"`
+// }
 
-type SpanOrFuzzyQuery struct {
-	SpanOr SpanOrQuery `json:"span_or"`
-}
+// type SpanOrFuzzyQuery struct {
+// 	SpanOr SpanOrQuery `json:"span_or"`
+// }
 
 var (
 	elasticClient *elastic.Client
@@ -325,20 +325,21 @@ func searchEndpoint(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, "Query not specified")
 		return
 	}
+	sort_by := c.Query("sort")
 	field := c.Query("field")
 	skip := 0
 	take := 1000
 	take_more := 30
 	terms := strings.Split(query, " ")
-	clause := make([]Clause, 0)
+	clause := make([]map[string]interface{}, 0)
 	for i := 0; i < len(terms); i++ {
-		clause = append(clause, Clause{
-			SpanMulti: SpanMultiQuery{
-				Match: MatchQuery{
-					Fuzzy: FuzzyQuery{
-						Content: FuzzyContent{
-							Fuzziness: strconv.Itoa(getMaxFuzzy(len(terms[i]))),
-							Value:     terms[i],
+		clause = append(clause, map[string]interface{}{
+			"span_multi": map[string]interface{}{
+				"match": map[string]interface{}{
+					"fuzzy": map[string]interface{}{
+						field: map[string]interface{}{
+							"fuzziness": strconv.Itoa(getMaxFuzzy(len(terms[i]))),
+							"value":     terms[i],
 						},
 					},
 				},
@@ -346,11 +347,11 @@ func searchEndpoint(c *gin.Context) {
 		})
 	}
 
-	esQuery := SpanFuzzyQuery{
-		SpanNear: SpanNearQuery{
-			Clauses: clause,
-			Slop:    1,
-			InOrder: "true",
+	esQuery := map[string]interface{}{
+		"span_near": map[string]interface{}{
+			"clauses":  clause,
+			"slop":     1,
+			"in_order": "true",
 		},
 	}
 
@@ -389,16 +390,16 @@ func searchEndpoint(c *gin.Context) {
 
 	if len(terms) > 1 && len(books) < 30 {
 		for i := 0; i < len(terms); i++ {
-			clause := make([]Clause, 0)
+			clause := make([]map[string]interface{}, 0)
 			for j := 0; j < len(terms); j++ {
 				if j != i {
-					clause = append(clause, Clause{
-						SpanMulti: SpanMultiQuery{
-							Match: MatchQuery{
-								Fuzzy: FuzzyQuery{
-									Content: FuzzyContent{
-										Fuzziness: strconv.Itoa(getMaxFuzzy(len(terms[j]))),
-										Value:     terms[j],
+					clause = append(clause, map[string]interface{}{
+						"span_multi": map[string]interface{}{
+							"match": map[string]interface{}{
+								"fuzzy": map[string]interface{}{
+									field: map[string]interface{}{
+										"fuzziness": strconv.Itoa(getMaxFuzzy(len(terms[i]))),
+										"value":     terms[i],
 									},
 								},
 							},
@@ -407,11 +408,11 @@ func searchEndpoint(c *gin.Context) {
 				}
 			}
 
-			esQuery := SpanFuzzyQuery{
-				SpanNear: SpanNearQuery{
-					Clauses: clause,
-					Slop:    1,
-					InOrder: "true",
+			esQuery := map[string]interface{}{
+				"span_near": map[string]interface{}{
+					"clauses":  clause,
+					"slop":     1,
+					"in_order": "true",
 				},
 			}
 
@@ -460,8 +461,8 @@ func searchEndpoint(c *gin.Context) {
 		res.Books = sorted_books
 	}
 
-	if field != "" {
-		field_sorted_books := sortByField(field, sorted_books)
+	if sort_by != "" {
+		field_sorted_books := sortByField(sort_by, sorted_books)
 		if len(field_sorted_books) > 10 {
 			res.Books = field_sorted_books[:10]
 		} else {
