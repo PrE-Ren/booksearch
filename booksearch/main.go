@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,64 +57,43 @@ type SearchResponse struct {
 	Books []SearchBook `json:"books"`
 }
 
-// type FuzzyContent struct {
-// 	Fuzziness string `json:"fuzziness"`
-// 	Value     string `json:"value"`
-// }
-// type FuzzyQuery struct {
-// 	Content FuzzyContent `json:"content"`
-// }
-
-// type MatchQuery struct {
-// 	Fuzzy FuzzyQuery `json:"fuzzy"`
-// }
-
-// type SpanMultiQuery struct {
-// 	Match MatchQuery `json:"match"`
-// }
-
-// type Clause struct {
-// 	SpanMulti SpanMultiQuery `json:"span_multi"`
-// }
-
-// type SpanNearQuery struct {
-// 	Clauses []Clause `json:"clauses"`
-// 	Slop    int      `json:"slop"`
-// 	InOrder string   `json:"in_order"`
-// }
-
-// type SpanFuzzyQuery struct {
-// 	SpanNear SpanNearQuery `json:"span_near"`
-// }
-
-// type SpanOrQuery struct {
-// 	Clauses []SpanFuzzyQuery `json:"clauses"`
-// }
-
-// type SpanOrFuzzyQuery struct {
-// 	SpanOr SpanOrQuery `json:"span_or"`
-// }
-
 var (
 	elasticClient *elastic.Client
 	startIndex    int
 )
 
 func main() {
-	var err error
-	// ticker := time.NewTicker(1 * time.Minute)
-	// done := make(chan bool)
-	// go func() {
-	// 	for {
-	// 		select {
-	// 		case <-done:
-	// 			return
-	// 		case <-ticker.C:
-	// 			//ticker = time.NewTicker(24 * time.Hour)
-	// 			crawlBooks()
-	// 		}
-	// 	}
-	// }()
+	f, err := os.OpenFile("data/startindex.txt", os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		log.Println(err)
+		return
+	} else {
+		_, err = fmt.Fscanf(f, "%d\n", &startIndex)
+		if err == io.EOF {
+			log.Println(err)
+			startIndex = 1
+		}
+	}
+	f.Close()
+
+	ticker := time.NewTicker(1 * time.Minute)
+	if startIndex > 4000 {
+		ticker = time.NewTicker(24 * time.Hour)
+	}
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if startIndex > 4000 {
+					ticker = time.NewTicker(24 * time.Hour)
+				}
+				crawlBooks()
+			}
+		}
+	}()
 
 	for {
 		elasticClient, err = elastic.NewClient(
@@ -123,7 +104,6 @@ func main() {
 			log.Println(err)
 			time.Sleep(3 * time.Second)
 		} else {
-			startIndex = 1
 			break
 		}
 	}
@@ -138,11 +118,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// for {
+	for {
 
-	// }
-	// ticker.Stop()
-	// done <- true
+	}
 }
 
 func crawlBooks() {
@@ -183,8 +161,21 @@ func crawlBooks() {
 		log.Println(err)
 	} else {
 		log.Println("Bulk insert success")
+		f, err := os.OpenFile("data/startindex.txt", os.O_RDWR, 0644)
+		if err != nil {
+			log.Println("error in open file")
+			return
+		}
+		_, err = f.WriteString(strconv.Itoa(index))
+		if err != nil {
+			log.Println("error writing file")
+			f.Close()
+			return
+		}
+		f.Sync()
+		f.Close()
+		startIndex = index
 	}
-	startIndex = index
 }
 
 func parseAsDate(release_date string) time.Time {
@@ -327,6 +318,9 @@ func searchEndpoint(c *gin.Context) {
 	}
 	sort_by := c.Query("sort")
 	field := c.Query("field")
+	if field == "" {
+		field = "content"
+	}
 	skip := 0
 	take := 1000
 	take_more := 30
@@ -645,9 +639,14 @@ func sortByField(field string, list []SearchBook) []SearchBook {
 			return new_list[i].Score > new_list[j].Score
 		})
 		return new_list
-	} else if field == "time" {
+	} else if field == "time_new" {
 		sort.SliceStable(new_list, func(i, j int) bool {
 			return new_list[i].ReleasedAt.After(new_list[j].ReleasedAt)
+		})
+		return new_list
+	} else if field == "time_old" {
+		sort.SliceStable(new_list, func(i, j int) bool {
+			return new_list[i].ReleasedAt.Before(new_list[j].ReleasedAt)
 		})
 		return new_list
 	} else if field == "alphabet" {
