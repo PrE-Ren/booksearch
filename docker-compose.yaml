@@ -1,0 +1,19 @@
+version: '3.5'
+services:
+  booksearch:
+    container_name: 'booksearch'
+    build: './booksearch'
+    restart: 'on-failure'
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./booksearch/data:/go/src/project/data
+    depends_on:
+      - elasticsearch
+  elasticsearch:
+    container_name: 'elasticsearch'
+    image: 'docker.elastic.co/elasticsearch/elasticsearch:6.2.3'
+    volumes:
+      - ./esdata:/usr/share/elasticsearch/data
+    ports:
+      - '9200:9200'

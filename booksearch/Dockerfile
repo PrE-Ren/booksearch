@@ -8,6 +8,4 @@ COPY . .
 
 RUN go install -v ./...
 
-VOLUME [ "/data" ]
-
 CMD ["go", "run", "main.go"]

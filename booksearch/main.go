@@ -89,8 +89,10 @@ func main() {
 			case <-ticker.C:
 				if startIndex > 4000 {
 					ticker = time.NewTicker(24 * time.Hour)
+					crawlBooks(100)
+				} else {
+					crawlBooks(10)
 				}
-				crawlBooks()
 			}
 		}
 	}()
@@ -123,11 +125,11 @@ func main() {
 	}
 }
 
-func crawlBooks() {
+func crawlBooks(amount int) {
 	bulk := elasticClient.Bulk()
 	ctx := context.Background()
 	var index int
-	for index = startIndex; index < startIndex+10; index++ {
+	for index = startIndex; index < startIndex+amount; index++ {
 		url := baseUrlTitle + strconv.Itoa(index) + "/" + strconv.Itoa(index) + ".txt"
 		res, err := http.Get(url)
 		if err != nil {
@@ -161,21 +163,21 @@ func crawlBooks() {
 		log.Println(err)
 	} else {
 		log.Println("Bulk insert success")
-		f, err := os.OpenFile("data/startindex.txt", os.O_RDWR, 0644)
-		if err != nil {
-			log.Println("error in open file")
-			return
-		}
-		_, err = f.WriteString(strconv.Itoa(index))
-		if err != nil {
-			log.Println("error writing file")
-			f.Close()
-			return
-		}
-		f.Sync()
-		f.Close()
-		startIndex = index
 	}
+	f, err := os.OpenFile("data/startindex.txt", os.O_RDWR, 0644)
+	if err != nil {
+		log.Println("error in open file")
+		return
+	}
+	_, err = f.WriteString(strconv.Itoa(index))
+	if err != nil {
+		log.Println("error writing file")
+		f.Close()
+		return
+	}
+	f.Sync()
+	f.Close()
+	startIndex = index
 }
 
 func parseAsDate(release_date string) time.Time {
